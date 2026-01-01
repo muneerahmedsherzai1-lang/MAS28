@@ -1,57 +1,24 @@
-name: Windows 11 General Tasks with RDP
+- name: Enable RDP (Strong Password)
+  shell: pwsh
+  run: |
+    Write-Host "Enabling RDP..."
 
-on:
-  push:
-  workflow_dispatch:
+    # Generate strong random password
+    $Password = -join (
+      (48..57) + (65..90) + (97..122) + (33..38) |
+      Get-Random -Count 16 | ForEach-Object {[char]$_}
+    )
 
-jobs:
-  general-tasks:
-    runs-on: windows-latest
-    timeout-minutes: 360
+    net user runneradmin "$Password"
 
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+    Set-ItemProperty `
+      -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+      -Name "fDenyTSConnections" -Value 0
 
-      - name: Show System Information
-        shell: pwsh
-        run: |
-          Write-Host "System Information"
-          systeminfo
-          Get-PSDrive
+    Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-      - name: Enable RDP
-        shell: pwsh
-        run: |
-          Write-Host "Enabling RDP..."
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          net user runneradmin "${{ secrets.RDP_PASSWORD }}"
-          Write-Host "RDP Enabled"
-
-      - name: Download & Configure Ngrok
-        shell: pwsh
-        run: |
-          Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
-          Expand-Archive ngrok.zip
-          .\ngrok\ngrok.exe config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
-
-      - name: Start Ngrok Tunnel (RDP)
-        shell: pwsh
-        run: |
-          Start-Process .\ngrok\ngrok.exe "tcp 3389"
-          Start-Sleep -Seconds 10
-          Invoke-RestMethod http://127.0.0.1:4040/api/tunnels
-
-      - name: Install Tools via Chocolatey
-        shell: pwsh
-        run: |
-          choco install nodejs git 7zip -y
-          node -v
-          git --version
-
-      - name: Keep Session Alive (6 hours)
-        shell: pwsh
-        run: |
-          Write-Host "RDP Session Active"
-          Start-Sleep -Seconds 21600
+    Write-Host "=============================="
+    Write-Host "RDP LOGIN DETAILS"
+    Write-Host "Username: runneradmin"
+    Write-Host "Password: $Password"
+    Write-Host "=============================="
