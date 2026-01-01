@@ -1,0 +1,91 @@
+name: Windows 11 General Tasks with RDP (Stable)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  general-tasks:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: System Info
+        shell: pwsh
+        run: |
+          systeminfo | Select-String "OS Name","OS Version","System Type"
+
+      - name: Enable RDP (Password Policy Fixed)
+        shell: pwsh
+        run: |
+          Write-Host "Enabling RDP..."
+
+          $Password = -join (
+            (48..57 + 65..90 + 97..122 + 33..38) |
+            Get-Random -Count 16 |
+            ForEach-Object { [char]$_ }
+          )
+
+          net user runneradmin "$Password"
+
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
+            -Name "fDenyTSConnections" -Value 0
+
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+          Write-Host "================================="
+          Write-Host "RDP USER : runneradmin"
+          Write-Host "RDP PASS : $Password"
+          Write-Host "================================="
+
+      - name: Install Ngrok
+        shell: pwsh
+        env:
+          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+        run: |
+          Invoke-WebRequest `
+            https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip `
+            -OutFile ngrok.zip
+
+          Expand-Archive ngrok.zip -Force
+          .\ngrok\ngrok.exe config add-authtoken $env:NGROK_AUTH_TOKEN
+
+      - name: Start Ngrok RDP Tunnel (Safe)
+        shell: pwsh
+        run: |
+          Start-Process -NoNewWindow `
+            -FilePath .\ngrok\ngrok.exe `
+            -ArgumentList "tcp 3389"
+
+          Write-Host "Waiting for ngrok..."
+          Start-Sleep -Seconds 20
+
+          try {
+            $tunnels = Invoke-RestMethod http://127.0.0.1:4040/api/tunnels
+            $addr = $tunnels.tunnels[0].public_url
+            Write-Host "=============================="
+            Write-Host "RDP ADDRESS: $addr"
+            Write-Host "=============================="
+          }
+          catch {
+            Write-Host "Ngrok tunnel is running."
+            Write-Host "If address not shown, check ngrok dashboard:"
+            Write-Host "https://dashboard.ngrok.com/endpoints"
+          }
+
+      - name: Install Tools
+        shell: pwsh
+        run: |
+          choco install git nodejs 7zip -y
+          git --version
+          node -v
+
+      - name: Keep RDP Alive (6 Hours)
+        shell: pwsh
+        run: |
+          Write-Host "RDP ACTIVE – do not stop workflow"
+          Start-Sleep -Seconds 21600
