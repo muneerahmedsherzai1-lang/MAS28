@@ -1,0 +1,22 @@
+name: Windows 11 General Tasks
+on: [push, workflow_dispatch]
+
+jobs:
+  general-tasks:
+    # Uses GitHub's hosted Windows 11 environment
+    runs-on: windows-11-arm  # Or use windows-latest for standard server-based Windows
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run PowerShell Script
+        shell: pwsh
+        run: |
+          Write-Host "Running on Windows 11 Pro Environment"
+          $OS = Get-WmiObject -Class Win32_OperatingSystem
+          Write-Host "OS Version: $($OS.Caption)"
+
+      - name: Install Tools via Chocolatey
+        run: |
+          choco install nodejs git -y
