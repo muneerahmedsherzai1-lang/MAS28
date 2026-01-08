@@ -1,79 +1,80 @@
-name: RDP
+name: Windows 11 Pro RDP (Self-Hosted)
 
 on:
   workflow_dispatch:
 
 jobs:
   rdp:
-    runs-on: windows-latest
+    runs-on: self-hosted
 
     steps:
-      - name: Enable RDP & Optimize Settings
+      - name: Enable RDP & Optimize
         shell: pwsh
         run: |
-          # Enable RDP
-          Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
-            -Name fDenyTSConnections -Value 0
+          Write-Host "Enabling RDP..."
 
-          # Disable NLA for compatibility
-          Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
-            -Name UserAuthentication -Value 0
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
+            -Name "fDenyTSConnections" -Value 0
 
-          # Improve RDP graphics experience
-          Set-ItemProperty "HKLM:\Software\Policies\Microsoft\Windows NT\Terminal Services" `
-            -Name fEnableVirtualizedGraphics -Value 1 -Type DWord -Force
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
+            -Name "UserAuthentication" -Value 1
 
-          # Firewall
-          netsh advfirewall firewall delete rule name="RDP"
-          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
           Restart-Service TermService -Force
 
       - name: Create RDP User
         shell: pwsh
         run: |
-          $password = -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 16 | % {[char]$_})
-          $secure = ConvertTo-SecureString $password -AsPlainText -Force
+          $user = "rdpuser"
+          $pass = -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 16 | ForEach-Object {[char]$_})
 
-          New-LocalUser "RDP" -Password $secure -AccountNeverExpires
-          Add-LocalGroupMember Administrators RDP
-          Add-LocalGroupMember "Remote Desktop Users" RDP
+          if (-not (Get-LocalUser -Name $user -ErrorAction SilentlyContinue)) {
+            $secure = ConvertTo-SecureString $pass -AsPlainText -Force
+            New-LocalUser $user -Password $secure -AccountNeverExpires
+            Add-LocalGroupMember Administrators $user
+            Add-LocalGroupMember "Remote Desktop Users" $user
+          }
 
-          echo "RDP_USER=RDP" >> $env:GITHUB_ENV
-          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+          echo "RDP_USER=$user" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$pass" >> $env:GITHUB_ENV
 
-      - name: Install Tailscale
+      - name: Ensure Tailscale Running
         shell: pwsh
         run: |
-          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
-          $out = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest $url -OutFile $out
-          Start-Process msiexec.exe -ArgumentList "/i $out /quiet /norestart" -Wait
+          if (-not (Get-Service Tailscale -ErrorAction SilentlyContinue)) {
+            winget install tailscale --silent
+          }
 
-      - name: Connect to Tailscale
-        shell: pwsh
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
-            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
-            --hostname=gh-rdp-$env:GITHUB_RUN_ID
+          Start-Service Tailscale -ErrorAction SilentlyContinue
 
-          $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          tailscale up --accept-dns --accept-routes
+
+          $ip = tailscale ip -4
           echo "TS_IP=$ip" >> $env:GITHUB_ENV
+
+      - name: System Info (RAM / Disk / GPU)
+        shell: pwsh
+        run: |
+          systeminfo | findstr /B /C:"OS Name" /C:"Total Physical Memory"
+          Get-PSDrive C
+          Get-CimInstance Win32_VideoController | Select Name
 
       - name: RDP Access Info
         shell: pwsh
         run: |
-          Write-Host "============================"
-          Write-Host " OS        : Windows Server"
+          Write-Host "=============================="
+          Write-Host " OS        : Windows 11 Pro"
           Write-Host " Address   : $env:TS_IP"
           Write-Host " Username  : $env:RDP_USER"
           Write-Host " Password  : $env:RDP_PASS"
-          Write-Host "============================"
+          Write-Host "=============================="
 
-      - name: Keep Session Alive (Max GitHub Limit)
+      - name: Keep Runner Alive
         shell: pwsh
         run: |
           while ($true) {
-            Write-Host "RDP running..."
             Start-Sleep 300
           }
