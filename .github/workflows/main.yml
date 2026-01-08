@@ -1,85 +1,79 @@
-name: Windows 11 General Tasks with RDP (Fixed)
+name: RDP
 
 on:
-  push:
   workflow_dispatch:
 
 jobs:
-  general-tasks:
+  rdp:
     runs-on: windows-latest
-    timeout-minutes: 360
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Display System Information
+      - name: Enable RDP & Optimize Settings
         shell: pwsh
         run: |
-          Write-Host "===== SYSTEM INFO ====="
-          systeminfo | Select-String "OS Name","OS Version","System Type"
-          Write-Host "======================="
-
-      - name: Enable RDP with Strong Password (Auto Fix)
-        shell: pwsh
-        run: |
-          Write-Host "Enabling Remote Desktop..."
-
-          # Generate strong password (Windows policy compliant)
-          $Password = -join (
-            (48..57 + 65..90 + 97..122 + 33..38) |
-            Get-Random -Count 16 |
-            ForEach-Object { [char]$_ }
-          )
-
-          # Set password for runneradmin
-          net user runneradmin "$Password"
-
           # Enable RDP
-          Set-ItemProperty `
-            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
-            -Name "fDenyTSConnections" -Value 0
+          Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
+            -Name fDenyTSConnections -Value 0
 
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          # Disable NLA for compatibility
+          Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
+            -Name UserAuthentication -Value 0
 
-          Write-Host "================================="
-          Write-Host "RDP LOGIN DETAILS"
-          Write-Host "Username : runneradmin"
-          Write-Host "Password : $Password"
-          Write-Host "================================="
+          # Improve RDP graphics experience
+          Set-ItemProperty "HKLM:\Software\Policies\Microsoft\Windows NT\Terminal Services" `
+            -Name fEnableVirtualizedGraphics -Value 1 -Type DWord -Force
 
-      - name: Download and Configure Ngrok
-        shell: pwsh
-        env:
-          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-        run: |
-          Invoke-WebRequest `
-            https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip `
-            -OutFile ngrok.zip
+          # Firewall
+          netsh advfirewall firewall delete rule name="RDP"
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
 
-          Expand-Archive ngrok.zip -Force
-          .\ngrok\ngrok.exe config add-authtoken $env:NGROK_AUTH_TOKEN
+          Restart-Service TermService -Force
 
-      - name: Start Ngrok RDP Tunnel
+      - name: Create RDP User
         shell: pwsh
         run: |
-          Start-Process -NoNewWindow `
-            -FilePath .\ngrok\ngrok.exe `
-            -ArgumentList "tcp 3389"
+          $password = -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 16 | % {[char]$_})
+          $secure = ConvertTo-SecureString $password -AsPlainText -Force
 
-          Start-Sleep -Seconds 10
-          Write-Host "NGROK RDP ADDRESS:"
-          Invoke-RestMethod http://127.0.0.1:4040/api/tunnels
+          New-LocalUser "RDP" -Password $secure -AccountNeverExpires
+          Add-LocalGroupMember Administrators RDP
+          Add-LocalGroupMember "Remote Desktop Users" RDP
 
-      - name: Install Development Tools
+          echo "RDP_USER=RDP" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+
+      - name: Install Tailscale
         shell: pwsh
         run: |
-          choco install nodejs git 7zip -y
-          node -v
-          git --version
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $out = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest $url -OutFile $out
+          Start-Process msiexec.exe -ArgumentList "/i $out /quiet /norestart" -Wait
 
-      - name: Keep RDP Session Alive (6 Hours)
+      - name: Connect to Tailscale
         shell: pwsh
         run: |
-          Write-Host "RDP is active. Do NOT stop the workflow."
-          Start-Sleep -Seconds 21600
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
+            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
+            --hostname=gh-rdp-$env:GITHUB_RUN_ID
+
+          $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          echo "TS_IP=$ip" >> $env:GITHUB_ENV
+
+      - name: RDP Access Info
+        shell: pwsh
+        run: |
+          Write-Host "============================"
+          Write-Host " OS        : Windows Server"
+          Write-Host " Address   : $env:TS_IP"
+          Write-Host " Username  : $env:RDP_USER"
+          Write-Host " Password  : $env:RDP_PASS"
+          Write-Host "============================"
+
+      - name: Keep Session Alive (Max GitHub Limit)
+        shell: pwsh
+        run: |
+          while ($true) {
+            Write-Host "RDP running..."
+            Start-Sleep 300
+          }
