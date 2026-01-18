@@ -1,80 +1,57 @@
-name: Windows 11 Pro RDP (Self-Hosted)
+name: RDP
 
 on:
   workflow_dispatch:
 
 jobs:
-  rdp:
-    runs-on: self-hosted
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 60
 
     steps:
-      - name: Enable RDP & Optimize
+      - name: Enable RDP and Firewall
         shell: pwsh
         run: |
           Write-Host "Enabling RDP..."
 
-          Set-ItemProperty `
-            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
-            -Name "fDenyTSConnections" -Value 0
-
-          Set-ItemProperty `
-            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
-            -Name "UserAuthentication" -Value 1
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
+            -Name "fDenyTSConnections" -Value 0 -Force
 
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
           Restart-Service TermService -Force
 
-      - name: Create RDP User
+          Write-Host "RDP enabled (locally)."
+
+      - name: Install Tailscale
         shell: pwsh
         run: |
-          $user = "rdpuser"
-          $pass = -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 16 | ForEach-Object {[char]$_})
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $out = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest $url -OutFile $out
+          Start-Process msiexec.exe -ArgumentList "/i `"$out`" /quiet /norestart" -Wait
 
-          if (-not (Get-LocalUser -Name $user -ErrorAction SilentlyContinue)) {
-            $secure = ConvertTo-SecureString $pass -AsPlainText -Force
-            New-LocalUser $user -Password $secure -AccountNeverExpires
-            Add-LocalGroupMember Administrators $user
-            Add-LocalGroupMember "Remote Desktop Users" $user
-          }
-
-          echo "RDP_USER=$user" >> $env:GITHUB_ENV
-          echo "RDP_PASS=$pass" >> $env:GITHUB_ENV
-
-      - name: Ensure Tailscale Running
+      - name: Connect Tailscale
         shell: pwsh
         run: |
-          if (-not (Get-Service Tailscale -ErrorAction SilentlyContinue)) {
-            winget install tailscale --silent
-          }
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
+            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
+            --hostname=gh-runner-$env:GITHUB_RUN_ID
 
-          Start-Service Tailscale -ErrorAction SilentlyContinue
+          Start-Sleep 5
+          $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
 
-          tailscale up --accept-dns --accept-routes
-
-          $ip = tailscale ip -4
           echo "TS_IP=$ip" >> $env:GITHUB_ENV
 
-      - name: System Info (RAM / Disk / GPU)
+      - name: Show Status
         shell: pwsh
         run: |
-          systeminfo | findstr /B /C:"OS Name" /C:"Total Physical Memory"
-          Get-PSDrive C
-          Get-CimInstance Win32_VideoController | Select Name
-
-      - name: RDP Access Info
-        shell: pwsh
-        run: |
+          Write-Host ""
           Write-Host "=============================="
-          Write-Host " OS        : Windows 11 Pro"
-          Write-Host " Address   : $env:TS_IP"
-          Write-Host " Username  : $env:RDP_USER"
-          Write-Host " Password  : $env:RDP_PASS"
+          Write-Host " TAILSCALE CONNECTED"
+          Write-Host " IP Address: $env:TS_IP"
           Write-Host "=============================="
-
-      - name: Keep Runner Alive
-        shell: pwsh
-        run: |
-          while ($true) {
-            Start-Sleep 300
-          }
+          Write-Host ""
+          Write-Host "NOTE:"
+          Write-Host "GitHub-hosted runners cannot accept external RDP."
+          Write-Host "Use self-hosted Windows runner if you need real RDP."
